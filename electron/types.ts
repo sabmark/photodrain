@@ -1,0 +1,70 @@
+export type WorkflowStep =
+  | "welcome"
+  | "backup-folder"
+  | "takeout-request"
+  | "download-export"
+  | "backup-summary"
+  | "photos-cleanup"
+  | "empty-trash"
+  | "logs-settings";
+
+export type AutomationStatus = "idle" | "running" | "paused" | "stopped" | "needs-manual-action" | "completed" | "error";
+
+export type LogLevel = "info" | "warn" | "error" | "safety";
+
+export interface AutomationLogEntry {
+  id: string;
+  timestamp: string;
+  level: LogLevel;
+  message: string;
+  details?: unknown;
+}
+
+export interface DownloadedFile {
+  filename: string;
+  path: string;
+  sizeBytes: number;
+}
+
+export interface UserProfile {
+  id: string;
+  name: string;
+  backupFolder: string | null;
+  backupRootFolder?: string | null;
+  avatarDataUrl?: string | null;
+  googleEmail?: string | null;
+  googleName?: string | null;
+  color?: string | null;
+  pendingLogin?: boolean | null;
+  previousProfileId?: string | null;
+}
+
+export interface AppState {
+  profiles: UserProfile[];
+  activeProfileId: string | null;
+  activeProfileName: string | null;
+  profileRefreshActive: boolean;
+  backupFolder: string | null;
+  backupRootFolder: string | null;
+  currentUrl: string | null;
+  isGoogleLoggedIn: boolean;
+  status: AutomationStatus;
+  downloadsComplete: boolean;
+  downloadedFiles: DownloadedFile[];
+  totalDownloadedBytes: number;
+  activeDownloadCount: number;
+  pausedDownloadCount: number;
+  logs: AutomationLogEntry[];
+  browserVisible: boolean;
+  lastScreenshotPath: string | null;
+}
+
+export interface AutomationResult {
+  ok: boolean;
+  message: string;
+}
+
+export interface FinalDeletePayload {
+  typedConfirmation: string;
+  understandsPermanentDelete: boolean;
+}

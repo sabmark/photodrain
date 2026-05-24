@@ -1,0 +1,10 @@
+node_modules
+dist
+dist-electron
+release
+debug
+*.log
+.DS_Store
+.env
+*.png
+!build/*.png

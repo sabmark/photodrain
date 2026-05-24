@@ -1,0 +1,59 @@
+{
+  "name": "photodrain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "PhotoDrain desktop automation skeleton for Google Takeout and Google Photos cleanup.",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"tsc -p tsconfig.electron.json --watch\" \"tsc -p tsconfig.preload.json --watch\" \"wait-on tcp:5173 file:dist-electron/main.js file:dist-electron/preload.cjs && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "build": "npm run typecheck && vite build && tsc -p tsconfig.electron.json && tsc -p tsconfig.preload.json",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview",
+    "dist": "npm run build && electron-builder",
+    "lint": "eslint . --ext .ts,.tsx"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "clsx": "^2.1.1",
+    "electron-store": "^10.1.0",
+    "lucide-react": "^0.468.0",
+    "tailwind-merge": "^2.5.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@types/node": "^22.10.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "eslint": "^9.16.0",
+    "postcss": "^8.4.49",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^3.4.16",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.59.4",
+    "vite": "^6.0.3",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "local.photodrain.app",
+    "productName": "PhotoDrain",
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "build/icon.png",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.ico"
+    },
+    "directories": {
+      "output": "release"
+    }
+  }
+}
