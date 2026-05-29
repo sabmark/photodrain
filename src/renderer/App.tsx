@@ -1,7 +1,7 @@
-import { Check, ChevronDown, FolderOpen, Loader2, LogOut, Mail, Plus, RefreshCw, ShieldAlert, Square, Trash2, UserRound } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, Clock3, Database, FolderOpen, HardDrive, Loader2, LogOut, Mail, Plus, RefreshCw, ShieldAlert, Square, Trash2, UserRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import packageJson from "../../package.json";
-import type { AppState, AutomationLogEntry, WorkflowStep } from "../../electron/types";
+import type { AppState, AutomationLogEntry, StorageUsageSummary, WorkflowStep } from "../../electron/types";
 import { Button } from "./components/Button";
 import { Card } from "./components/Card";
 import { formatBytes } from "./lib/utils";
@@ -74,9 +74,13 @@ export function App() {
   const [understandsDelete, setUnderstandsDelete] = useState(false);
   const [trashEmptied, setTrashEmptied] = useState(false);
   const [lastResult, setLastResult] = useState<string | null>(null);
+  const [storageUsage, setStorageUsage] = useState<StorageUsageSummary | null>(null);
+  const [storageUsagePending, setStorageUsagePending] = useState(false);
+  const [storageUsageError, setStorageUsageError] = useState<string | null>(null);
   const [browserPanelWidth, setBrowserPanelWidth] = useState(getDefaultBrowserWidth);
   const [browserUserResized, setBrowserUserResized] = useState(false);
   const photosCleanupOpenedRef = useRef(false);
+  const loadedStorageProfileRef = useRef<string | null>(null);
   const hasActiveDownload = state.activeDownloadCount > 0;
   const hasProfiles = state.profiles.length > 0;
 
@@ -179,6 +183,17 @@ export function App() {
   }, [state.profileRefreshActive]);
 
   useEffect(() => {
+    if (activeStep !== "welcome" || profileLoginActive || !state.activeProfileId || storageUsagePending) {
+      return;
+    }
+    if (loadedStorageProfileRef.current === state.activeProfileId) {
+      return;
+    }
+    loadedStorageProfileRef.current = state.activeProfileId;
+    void refreshStorageUsage();
+  }, [activeStep, profileLoginActive, state.activeProfileId, storageUsagePending]);
+
+  useEffect(() => {
     if (!profileLoginActive) {
       return;
     }
@@ -215,6 +230,25 @@ export function App() {
       setLastResult(String((result as { message: string }).message));
     }
     setState(await window.photoDrain.getState());
+  }
+
+  async function refreshStorageUsage() {
+    if (!state.activeProfileId || storageUsagePending) {
+      return;
+    }
+    setStorageUsagePending(true);
+    setStorageUsageError(null);
+    try {
+      const summary = await window.photoDrain.getStorageUsage();
+      setStorageUsage(summary);
+    } catch (error) {
+      loadedStorageProfileRef.current = null;
+      setStorageUsage(null);
+      setStorageUsageError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setStorageUsagePending(false);
+      setState(await window.photoDrain.getState());
+    }
   }
 
   async function requestExportThenDownload() {
@@ -347,6 +381,9 @@ export function App() {
       setProfileMenuOpen(false);
       setProfileLoginActive(true);
       setContinueAfterProfileLogin(false);
+      loadedStorageProfileRef.current = null;
+      setStorageUsage(null);
+      setStorageUsageError(null);
       photosCleanupOpenedRef.current = false;
       setTrashEmptied(false);
       setDeleteText("");
@@ -366,7 +403,10 @@ export function App() {
     setProfileMenuOpen(false);
     setProfileLoginActive(false);
     setContinueAfterProfileLogin(false);
-    setActiveStep("backup-folder");
+    loadedStorageProfileRef.current = null;
+    setStorageUsage(null);
+    setStorageUsageError(null);
+    setActiveStep("welcome");
     photosCleanupOpenedRef.current = false;
     setTrashEmptied(false);
     setDeleteText("");
@@ -383,7 +423,10 @@ export function App() {
     setProfileMenuOpen(false);
     setProfileLoginActive(false);
     setContinueAfterProfileLogin(false);
-    setActiveStep("backup-folder");
+    loadedStorageProfileRef.current = null;
+    setStorageUsage(null);
+    setStorageUsageError(null);
+    setActiveStep("welcome");
     photosCleanupOpenedRef.current = false;
     setTrashEmptied(false);
     setDeleteText("");
@@ -483,16 +526,19 @@ export function App() {
               onOpenLogin={() => run(window.photoDrain.openGoogleLogin)}
             />
           ) : activeStep === "welcome" && (
-            <Screen title="Welcome" description="This app uses a visible, user-authenticated Google browser session inside Electron. It stores local browser cookies only and never asks for or stores your Google password.">
-              <SafetyList />
-              {hasProfiles ? (
-                <Button className="mt-4" onClick={() => setActiveStep("backup-folder")}>Start workflow</Button>
-              ) : (
-                <Card className="mt-4 p-4 text-sm text-muted-foreground">
-                  Add a Google profile from the profile switcher to use PhotoDrain.
-                </Card>
-              )}
-              <AboutCard />
+            <Screen title="Overview" description="Review the active Google profile and storage usage before starting a backup workflow.">
+              <WelcomeView
+                activeProfile={state.profiles.find((profile) => profile.id === state.activeProfileId) ?? state.profiles[0] ?? null}
+                hasProfiles={hasProfiles}
+                storageError={storageUsageError}
+                storagePending={storageUsagePending || state.profileRefreshActive}
+                storageSummary={storageUsage}
+                onRefreshStorage={() => {
+                  loadedStorageProfileRef.current = null;
+                  void refreshStorageUsage();
+                }}
+                onStart={() => setActiveStep("backup-folder")}
+              />
             </Screen>
           )}
 
@@ -795,24 +841,192 @@ function getInitials(name: string) {
     .join("");
 }
 
+function WelcomeView({
+  activeProfile,
+  hasProfiles,
+  storageError,
+  storagePending,
+  storageSummary,
+  onRefreshStorage,
+  onStart
+}: {
+  activeProfile: AppState["profiles"][number] | null;
+  hasProfiles: boolean;
+  storageError: string | null;
+  storagePending: boolean;
+  storageSummary: StorageUsageSummary | null;
+  onRefreshStorage: () => void;
+  onStart: () => void;
+}) {
+  const profileTitle = activeProfile?.googleName || activeProfile?.name || "No profile selected";
+  const profileSubtitle = activeProfile?.googleEmail || "Google account details not cached yet";
+
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <Card className="overflow-hidden">
+          <div className="border-b border-border px-5 py-4">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-center gap-3">
+                {activeProfile ? (
+                  <ProfileAvatar profile={activeProfile} size="md" />
+                ) : (
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                    <UserRound size={18} />
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold">{profileTitle}</div>
+                  <div className="truncate text-sm text-muted-foreground">{profileSubtitle}</div>
+                </div>
+              </div>
+              <Button className="shrink-0" icon={<FolderOpen size={16} />} disabled={!hasProfiles} onClick={onStart}>
+                Start Workflow
+              </Button>
+            </div>
+          </div>
+
+          <StorageUsagePanel error={storageError} pending={storagePending} summary={storageSummary} onRefresh={onRefreshStorage} />
+        </Card>
+
+        <ReadinessPanel hasProfiles={hasProfiles} storageError={storageError} storageSummary={storageSummary} />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <SafetyList />
+        <AboutCard />
+      </div>
+    </div>
+  );
+}
+
+function StorageUsagePanel({
+  error,
+  pending,
+  summary,
+  onRefresh
+}: {
+  error: string | null;
+  pending: boolean;
+  summary: StorageUsageSummary | null;
+  onRefresh: () => void;
+}) {
+  const percentValue = summary?.percentFull ? Number.parseInt(summary.percentFull, 10) : null;
+  const progressWidth = percentValue === null || Number.isNaN(percentValue) ? 0 : Math.min(100, Math.max(0, percentValue));
+
+  return (
+    <div className="p-5">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+            <HardDrive size={16} />
+            Google storage
+          </div>
+          <div className="mt-2 text-4xl font-semibold tracking-normal">
+            {summary?.percentFull || (pending ? "Loading..." : "Not loaded")}
+          </div>
+          <div className="mt-2 text-sm text-muted-foreground">
+            {summary?.rawUsage || (error ? "Could not load storage usage." : "Storage usage appears after Google sign-in.")}
+          </div>
+        </div>
+        <Button className="shrink-0" variant="secondary" icon={pending ? <Loader2 className="animate-spin" size={16} /> : <RefreshCw size={16} />} disabled={pending} onClick={onRefresh}>
+          Refresh
+        </Button>
+      </div>
+
+      <div className="mt-5 h-3 overflow-hidden rounded-full bg-muted">
+        <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${progressWidth}%` }} />
+      </div>
+
+      {summary?.items.length ? (
+        <div className="mt-4 grid gap-2 sm:grid-cols-3 xl:grid-cols-1 2xl:grid-cols-3">
+          {summary.items.map((item) => (
+            <div key={item.label} className="rounded-md border border-border px-3 py-2 text-sm">
+              <div className="text-xs text-muted-foreground">{item.label}</div>
+              <div className="mt-1 font-medium">{item.value}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {error && <div className="mt-3 rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">{error}</div>}
+      {summary && (
+        <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
+          <Clock3 size={13} />
+          Updated {new Date(summary.fetchedAt).toLocaleString()}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReadinessPanel({
+  hasProfiles,
+  storageError,
+  storageSummary
+}: {
+  hasProfiles: boolean;
+  storageError: string | null;
+  storageSummary: StorageUsageSummary | null;
+}) {
+  const rows = [
+    {
+      label: "Google profile",
+      value: hasProfiles ? "Ready" : "Required",
+      ok: hasProfiles
+    },
+    {
+      label: "Storage check",
+      value: storageSummary ? "Loaded" : storageError ? "Needs attention" : "Pending",
+      ok: Boolean(storageSummary)
+    },
+    {
+      label: "Local workflow",
+      value: hasProfiles ? "Available" : "Waiting",
+      ok: hasProfiles
+    }
+  ];
+
+  return (
+    <Card className="p-4">
+      <div className="flex items-center gap-2 text-sm font-semibold">
+        <Database size={16} />
+        Status
+      </div>
+      <div className="mt-4 space-y-3">
+        {rows.map((row) => (
+          <div key={row.label} className="flex items-center justify-between gap-3 text-sm">
+            <div className="flex min-w-0 items-center gap-2">
+              {row.ok ? <Check className="shrink-0 text-primary" size={15} /> : <AlertCircle className="shrink-0 text-muted-foreground" size={15} />}
+              <span className="truncate text-muted-foreground">{row.label}</span>
+            </div>
+            <span className="shrink-0 font-medium">{row.value}</span>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 function SafetyList() {
   return (
-    <Card className="p-4 text-sm leading-6">
-      <div>Unofficial automation tool. Google UI changes may require manual fallback.</div>
-      <div>CAPTCHA, 2FA, account prompts, and security confirmations are never bypassed.</div>
-      <div>All processing is local. There is no backend and no cloud upload.</div>
+    <Card className="p-4">
+      <div className="text-sm font-semibold">Session safeguards</div>
+      <div className="mt-3 grid gap-3 text-sm leading-6 text-muted-foreground md:grid-cols-3 xl:grid-cols-1 2xl:grid-cols-3">
+        <div>Manual Google prompts remain under your control.</div>
+        <div>Browser cookies stay in the local Electron profile.</div>
+        <div>No backend service receives your photos or account data.</div>
+      </div>
     </Card>
   );
 }
 
 function AboutCard() {
   return (
-    <Card className="mt-5 space-y-3 p-4 text-sm leading-6">
+    <Card className="space-y-3 p-4 text-sm leading-6">
       <div>
-        <div className="font-medium">About PhotoDrain</div>
-        <p className="mt-1 text-muted-foreground">
-          PhotoDrain is a local Electron app that uses your own visible Google browser session to request a Google Photos Takeout backup, download ZIP files, then automate cleanup in Google Photos.
-        </p>
+        <div className="font-semibold">PhotoDrain</div>
+        <p className="mt-1 text-muted-foreground">Local desktop workspace for Google Photos backup and cleanup.</p>
       </div>
       <div>
         <div className="font-medium">Built by Mark Anthony Sabandal</div>

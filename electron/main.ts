@@ -285,6 +285,15 @@ function registerIpc() {
     notifyState();
     return isLoggedIn;
   });
+  ipcMain.handle("browser:get-storage-usage", async () => {
+    const isLoggedIn = await browser.checkLoginStatus();
+    if (!isLoggedIn) {
+      throw new Error("Sign in to Google before loading storage usage.");
+    }
+    const summary = await browser.getGoogleOneStorageUsage();
+    notifyState();
+    return summary;
+  });
   ipcMain.handle("browser:clear-google-session", async () => {
     await browser.clearGoogleSession();
     if (getActiveProfile()) {

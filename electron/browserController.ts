@@ -2,7 +2,7 @@ import { BrowserView, BrowserWindow, DownloadItem, Session, app, dialog, session
 import fs from "node:fs";
 import path from "node:path";
 import type { AutomationLogger } from "./logger.js";
-import type { DownloadedFile } from "./types.js";
+import type { DownloadedFile, StorageUsageSummary } from "./types.js";
 
 const TOP_BAR_HEIGHT = 0;
 const SIDEBAR_WIDTH = 260;
@@ -380,6 +380,83 @@ export class BrowserController {
       googleEmail: details.googleEmail,
       googleName: details.googleName
     };
+  }
+
+  async getGoogleOneStorageUsage(): Promise<StorageUsageSummary> {
+    const view = this.ensureView();
+    const url = "https://one.google.com/storage/management?g1_landing_page=6";
+    this.logger.log("info", "Loading Google One storage usage");
+    await view.webContents.loadURL(url);
+    await this.waitForDocumentReady();
+
+    const started = Date.now();
+    while (Date.now() - started < 15000) {
+      const ready = await view.webContents.executeJavaScript(`
+        (() => {
+          const text = document.body?.innerText || '';
+          return /Storage used/i.test(text) || /storage full/i.test(text) || /Google Drive/i.test(text);
+        })();
+      `, true).catch(() => false);
+      if (ready) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+
+    const summary = await view.webContents.executeJavaScript(`
+      (() => {
+        const clean = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+        const xpath = '/html/body/div[6]/c-wiz/div/div/span/div/main/c-wiz/c-wiz/div[1]/div[1]';
+        const xpathNode = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+        const candidates = [
+          xpathNode,
+          ...Array.from(document.querySelectorAll('main div, c-wiz div'))
+        ].filter(Boolean);
+
+        const node = candidates.find((candidate) => {
+          const text = candidate.innerText || candidate.textContent || '';
+          return /Storage used/i.test(text) && /of\\s+\\d/i.test(text);
+        });
+
+        if (!node) {
+          throw new Error('Google One storage summary was not found.');
+        }
+
+        const lines = String(node.innerText || node.textContent || '')
+          .split(/\\n+/)
+          .map(clean)
+          .filter(Boolean)
+          .filter((line) => !/^expand_(less|more)$/i.test(line) && !/^Usage details$/i.test(line));
+
+        const fullLine = lines.find((line) => /storage full/i.test(line)) || null;
+        const rawUsage = lines.find((line) => /\\bof\\b/i.test(line) && /\\d/.test(line)) || null;
+        const usageMatch = rawUsage?.match(/^(.+?)\\s+of\\s+(.+)$/i) || null;
+        const startIndex = lines.findIndex((line) => /^Gmail$|^Google Drive$|^Google Photos$/i.test(line));
+        const details = [];
+
+        if (startIndex >= 0) {
+          for (let index = startIndex; index < lines.length - 1; index += 2) {
+            const label = lines[index];
+            const value = lines[index + 1];
+            if (/^Gmail$|^Google Drive$|^Google Photos$/i.test(label) && /\\d/.test(value)) {
+              details.push({ label, value });
+            }
+          }
+        }
+
+        return {
+          percentFull: fullLine?.match(/\\d+%/)?.[0] || null,
+          used: usageMatch?.[1] || null,
+          limit: usageMatch?.[2] || null,
+          rawUsage,
+          items: details,
+          fetchedAt: new Date().toISOString()
+        };
+      })();
+    `, true) as StorageUsageSummary;
+
+    this.logger.log("info", "Loaded Google One storage usage", summary);
+    return summary;
   }
 
   private async waitForDocumentReady() {

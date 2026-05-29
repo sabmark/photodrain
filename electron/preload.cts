@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppState, AutomationLogEntry, FinalDeletePayload } from "./types.js";
+import type { AppState, AutomationLogEntry, FinalDeletePayload, StorageUsageSummary } from "./types.js";
 
 const api = {
   getState: () => ipcRenderer.invoke("app:get-state") as Promise<AppState>,
@@ -11,6 +11,7 @@ const api = {
   deleteProfile: (id: string) => ipcRenderer.invoke("profiles:delete", id) as Promise<AppState>,
   openGoogleLogin: () => ipcRenderer.invoke("browser:open-google-login") as Promise<void>,
   checkLoginStatus: () => ipcRenderer.invoke("browser:check-login-status") as Promise<boolean>,
+  getStorageUsage: () => ipcRenderer.invoke("browser:get-storage-usage") as Promise<StorageUsageSummary>,
   clearGoogleSession: () => ipcRenderer.invoke("browser:clear-google-session") as Promise<void>,
   showBrowser: () => ipcRenderer.invoke("browser:show") as Promise<void>,
   hideBrowser: () => ipcRenderer.invoke("browser:hide") as Promise<void>,

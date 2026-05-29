@@ -26,6 +26,20 @@ export interface DownloadedFile {
   sizeBytes: number;
 }
 
+export interface StorageUsageItem {
+  label: string;
+  value: string;
+}
+
+export interface StorageUsageSummary {
+  percentFull: string | null;
+  used: string | null;
+  limit: string | null;
+  rawUsage: string | null;
+  items: StorageUsageItem[];
+  fetchedAt: string;
+}
+
 export interface UserProfile {
   id: string;
   name: string;
