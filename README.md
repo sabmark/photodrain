@@ -88,6 +88,8 @@ npm run lint
 npm run build
 ```
 
+See `docs/verification.md` for the full automated and manual smoke-test checklist.
+
 Package:
 
 ```bash
