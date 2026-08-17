@@ -199,6 +199,57 @@ export class BrowserController {
     this.notifyState();
   }
 
+  async prepareForDownloadInteraction() {
+    if (!this.parent) {
+      throw new Error("Main window is not ready");
+    }
+
+    const parent = this.parent;
+    const needsAttention = parent.isMinimized() || !parent.isFocused();
+    this.show();
+
+    if (parent.isMinimized()) {
+      parent.restore();
+    }
+    parent.show();
+    this.layout();
+
+    // Allow Windows and Electron to apply the restored content bounds before
+    // page coordinates are inspected and sent back as trusted mouse input.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    this.layout();
+
+    const bounds = this.view?.getBounds();
+    if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
+      throw new Error("The visible Google browser is not ready for the download confirmation.");
+    }
+
+    if (needsAttention) {
+      parent.flashFrame(true);
+      if (Notification.isSupported()) {
+        const notification = new Notification({
+          title: "PhotoDrain is ready to download",
+          body: "Google may ask you to confirm your password. PhotoDrain brought the Google page forward so you can finish the download.",
+          silent: false
+        });
+        notification.on("click", () => {
+          if (parent.isMinimized()) {
+            parent.restore();
+          }
+          parent.show();
+          parent.focus();
+        });
+        notification.on("failed", (_event, error) => {
+          this.logger.log("warn", "Could not show download attention notification", { error });
+        });
+        notification.show();
+      }
+    }
+
+    parent.focus();
+    this.logger.log("info", "Prepared visible Google browser for download confirmation", { bounds, needsAttention });
+  }
+
   async setInPageInteractionBlocked(blocked: boolean) {
     if (!this.view) {
       return;
@@ -781,6 +832,7 @@ export class BrowserController {
 
     this.googleSession.on("will-download", (event, item: DownloadItem) => {
       this.downloadEventCount += 1;
+      void this.setGoogleAuthRequired(false);
       const folder = this.getBackupFolder();
       if (!folder) {
         this.logger.log("error", "Download blocked because no backup folder is selected");

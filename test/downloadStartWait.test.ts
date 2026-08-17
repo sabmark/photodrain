@@ -40,7 +40,7 @@ test("suspends the download-start timeout while manual Google authentication is 
   assert.equal(outcome, "download-started");
 });
 
-test("still reports no download when no authentication or download appears", async () => {
+test("reports no download so the caller can stop instead of restarting the export", async () => {
   let now = 0;
   const outcome = await waitForDownloadStartSignal({
     timeoutMs: 2_000,

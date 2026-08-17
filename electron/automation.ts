@@ -380,13 +380,22 @@ export class AutomationRunner {
       return this.createGooglePhotosExport("50GB");
     }
 
+    await this.browser.prepareForDownloadInteraction();
+
     const result = await this.browser.executeScript<{ candidates: Array<{ text: string; x: number; y: number; score: number }> }>(`
       (() => {
         const visible = (el) => {
           if (!(el instanceof HTMLElement)) return false;
           const rect = el.getBoundingClientRect();
           const style = window.getComputedStyle(el);
-          return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          return rect.width > 0 &&
+            rect.height > 0 &&
+            rect.bottom > 0 &&
+            rect.top < window.innerHeight &&
+            rect.right > 0 &&
+            rect.left < window.innerWidth &&
+            style.visibility !== 'hidden' &&
+            style.display !== 'none';
         };
         const textFor = (el) => ((el.textContent || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('href') || '')).trim().toLowerCase();
         const body = document.body?.innerText?.toLowerCase() || '';
@@ -452,15 +461,17 @@ export class AutomationRunner {
       await this.updateAutomationBrowserLock(true);
       const clickOutcome = await this.waitForDownloadStartOrLimit(downloadEventCount);
       if (clickOutcome === "modal-blocked") {
-        await this.dismissBlockingModal();
         const debugPath = await this.dumpTakeoutDebug("takeout-download-blocking-modal");
         if (this.browser.getDownloadEventCount() > downloadEventCount) {
-          this.logger.log("info", "Takeout download event arrived after blocking modal; validating local ZIP files before requesting a new export", { debugPath });
+          this.logger.log("info", "Takeout download event arrived after blocking modal; validating local ZIP files", { debugPath });
           const files = await this.browser.waitForDownloadsToFinish(1000 * 60 * 60 * 6, downloadEventCount);
           return { ok: true, message: `Downloaded and validated ${files.length} Takeout ZIP file(s).` };
         }
-        this.logger.log("warn", "Takeout download opened a blocking modal; treating the archive as exhausted and creating a new Google Photos export", { debugPath });
-        return this.createGooglePhotosExport("50GB");
+        this.logger.log("warn", "Takeout download needs manual Google confirmation; automated retry is paused", { debugPath });
+        this.status = "needs-manual-action";
+        await this.browser.setGoogleAuthRequired(true);
+        this.notifyState();
+        return { ok: false, message: "Google needs you to finish the visible download confirmation. PhotoDrain paused automatic retries." };
       }
       if (clickOutcome === "limit-reached") {
         const debugPath = await this.dumpTakeoutDebug("takeout-download-limit");
@@ -486,8 +497,11 @@ export class AutomationRunner {
       }
 
       const debugPath = await this.dumpTakeoutDebug("takeout-no-download-after-click");
-      this.logger.log("warn", "No download started after clicking Takeout Download; treating this archive as exhausted and creating a new Google Photos export", { debugPath });
-      return this.createGooglePhotosExport("50GB");
+      this.logger.log("warn", "No download started after clicking Takeout Download; automated retry is paused for manual Google confirmation", { debugPath });
+      this.status = "needs-manual-action";
+      await this.browser.setGoogleAuthRequired(true);
+      this.notifyState();
+      return { ok: false, message: "Google did not start the ZIP download. Check the visible Google page and finish its password or confirmation prompt; PhotoDrain will not restart the export." };
     }
 
     const files = await this.browser.waitForDownloadsToFinish(1000 * 60 * 60 * 6, initialDownloadEventCount);
