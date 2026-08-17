@@ -4,6 +4,7 @@ import packageJson from "../../package.json";
 import type { AppState, AutomationLogEntry, StorageUsageSummary, WorkflowStep } from "../../electron/types";
 import { Button } from "./components/Button";
 import { Card } from "./components/Card";
+import { desiredBrowserInteractionLock } from "./lib/browserInteraction";
 import { formatBytes } from "./lib/utils";
 
 const steps: { id: WorkflowStep; label: string }[] = [
@@ -166,19 +167,17 @@ export function App() {
   }, [activeStep, hasActiveDownload, state.downloadsComplete, state.status]);
 
   useEffect(() => {
-    if (!state.browserVisible) {
-      return;
+    const desiredLock = desiredBrowserInteractionLock({
+      activeStep,
+      activeDownloadCount: state.activeDownloadCount,
+      browserVisible: state.browserVisible,
+      googleAuthRequired: state.googleAuthRequired,
+      status: state.status
+    });
+    if (desiredLock !== null) {
+      void window.photoDrain.setBrowserInteractionLocked(desiredLock);
     }
-
-    if (activeStep === "download-export" || activeStep === "backup-summary" || activeStep === "photos-cleanup") {
-      void window.photoDrain.setBrowserInteractionLocked(true);
-      return;
-    }
-
-    if (!hasActiveDownload && state.status !== "running") {
-      void window.photoDrain.setBrowserInteractionLocked(false);
-    }
-  }, [activeStep, hasActiveDownload, state.browserVisible, state.status]);
+  }, [activeStep, state.activeDownloadCount, state.browserVisible, state.googleAuthRequired, state.status]);
 
   useEffect(() => {
     if (activeStep === "photos-cleanup" && state.downloadsComplete && !photosCleanupOpenedRef.current) {
@@ -613,9 +612,9 @@ export function App() {
                   <div className="flex items-start gap-3">
                     <ShieldAlert className="mt-0.5 shrink-0" size={20} />
                     <div>
-                      <div className="font-semibold">Google needs your password to start this download</div>
+                      <div className="font-semibold">Google needs you to continue this download</div>
                       <div className="mt-1 leading-6">
-                        Enter it only in the visible Google page. PhotoDrain has paused its retry timer and will continue automatically after Google finishes verification. Your password is never read or stored by PhotoDrain.
+                        Use the now-unlocked Google page to click Download or complete Google's password prompt. PhotoDrain has paused its retry timer and will continue automatically when Google starts the ZIP transfer. Your password is never read or stored by PhotoDrain.
                       </div>
                     </div>
                   </div>
