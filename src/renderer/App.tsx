@@ -56,6 +56,7 @@ const emptyState: AppState = {
   totalDownloadedBytes: 0,
   activeDownloadCount: 0,
   pausedDownloadCount: 0,
+  googleAuthRequired: false,
   logs: [],
   browserVisible: false,
   lastScreenshotPath: null
@@ -573,6 +574,19 @@ export function App() {
 
           {!profileLoginActive && activeStep === "download-export" && (
             <Screen title="Wait And Download Export ZIPs" description="PhotoDrain checks Google Takeout Manage exports first, waits for an in-progress export to become ready, then downloads ZIP files to the selected backup folder.">
+              {state.googleAuthRequired && (
+                <div className="mt-3 rounded-md border border-amber-400 bg-amber-50 px-4 py-4 text-sm text-amber-950">
+                  <div className="flex items-start gap-3">
+                    <ShieldAlert className="mt-0.5 shrink-0" size={20} />
+                    <div>
+                      <div className="font-semibold">Google needs your password to start this download</div>
+                      <div className="mt-1 leading-6">
+                        Enter it only in the visible Google page. PhotoDrain has paused its retry timer and will continue automatically after Google finishes verification. Your password is never read or stored by PhotoDrain.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
               {state.activeDownloadCount > 0 && (
                 <div className="mt-3 space-y-3 rounded-md border border-border bg-muted px-3 py-3 text-sm">
                   <div>Active downloads: {state.activeDownloadCount}. Canceling deletes incomplete local files.</div>

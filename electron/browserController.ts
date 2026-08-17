@@ -1,8 +1,9 @@
-import { BrowserView, BrowserWindow, DownloadItem, Session, app, dialog, session } from "electron";
+import { BrowserView, BrowserWindow, DownloadItem, Notification, Session, app, dialog, session } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import type { AutomationLogger } from "./logger.js";
 import type { DownloadedFile, StorageUsageSummary } from "./types.js";
+import { isManualGoogleAuthChallenge } from "./googleAuth.js";
 
 const TOP_BAR_HEIGHT = 0;
 const SIDEBAR_WIDTH = 260;
@@ -24,6 +25,8 @@ export class BrowserController {
   private browserVisible = false;
   private preferredBrowserWidth: number | null = null;
   private browserInteractionLocked = false;
+  private googleAuthRequired = false;
+  private googleAuthNotification: Notification | null = null;
 
   constructor(
     private readonly logger: AutomationLogger,
@@ -35,6 +38,7 @@ export class BrowserController {
   attach(parent: BrowserWindow) {
     this.parent = parent;
     parent.on("resize", () => this.layout());
+    parent.on("focus", () => parent.flashFrame(false));
   }
 
   getCurrentUrl() {
@@ -65,6 +69,10 @@ export class BrowserController {
     return 0;
   }
 
+  getGoogleAuthRequired() {
+    return this.googleAuthRequired;
+  }
+
   pauseActiveDownloads() {
     this.logger.log("warn", "Pause download ignored; Takeout downloads are canceled and restarted instead of paused");
   }
@@ -92,6 +100,7 @@ export class BrowserController {
     this.activeDownloadItems.clear();
     this.downloadProgress.clear();
     this.updateTaskbarDownloadProgress();
+    void this.setGoogleAuthRequired(false);
     void this.setBrowserInteractionLocked(false);
     this.logger.log("warn", `Canceled ${canceled} active download(s) and deleted incomplete local file(s)`);
     this.notifyState();
@@ -136,6 +145,58 @@ export class BrowserController {
     `, true).catch((error) => {
       this.logger.log("warn", "Could not update browser interaction lock", { locked, shouldLock, message: error instanceof Error ? error.message : String(error) });
     });
+  }
+
+  async setGoogleAuthRequired(required: boolean) {
+    if (this.googleAuthRequired === required) {
+      return;
+    }
+
+    this.googleAuthRequired = required;
+    if (!required) {
+      this.parent?.flashFrame(false);
+      this.googleAuthNotification?.close();
+      this.googleAuthNotification = null;
+      this.notifyState();
+      return;
+    }
+
+    this.show();
+    await this.setBrowserInteractionLocked(false);
+    const parent = this.parent;
+    if (parent && !parent.isFocused()) {
+      parent.flashFrame(true);
+
+      if (Notification.isSupported()) {
+        const notification = new Notification({
+          title: "PhotoDrain needs your attention",
+          body: "Google needs your password before the Takeout ZIP download can begin. Enter it only in the visible Google page.",
+          silent: false,
+          timeoutType: "never",
+          urgency: "critical"
+        });
+        notification.on("click", () => {
+          if (parent.isMinimized()) {
+            parent.restore();
+          }
+          parent.show();
+          parent.focus();
+        });
+        notification.on("failed", (_event, error) => {
+          this.logger.log("warn", "Could not show Google authentication notification", { error });
+        });
+        this.googleAuthNotification = notification;
+        notification.show();
+      }
+
+      if (parent.isMinimized()) {
+        parent.restore();
+      }
+      parent.show();
+      parent.focus();
+    }
+
+    this.notifyState();
   }
 
   async setInPageInteractionBlocked(blocked: boolean) {
@@ -831,38 +892,21 @@ export class BrowserController {
     this.parent.setProgressBar(Math.min(1, Math.max(0, receivedBytes / totalBytes)));
   }
 
-  private async isManualGoogleAuthPage() {
+  async isManualGoogleAuthPage() {
     if (!this.view) {
       return false;
     }
 
-    const url = this.view.webContents.getURL().toLowerCase();
-    if (
-      url.includes("accounts.google.com") ||
-      url.includes("signin") ||
-      url.includes("challenge") ||
-      url.includes("password")
-    ) {
+    const url = this.view.webContents.getURL();
+    if (isManualGoogleAuthChallenge(url)) {
       return true;
     }
 
-    return this.view.webContents.executeJavaScript(`
-      (() => {
-        const text = (document.body?.innerText || '').replace(/\\s+/g, ' ').toLowerCase();
-        return text.includes("verify it's you") ||
-          text.includes("verify it’s you") ||
-          text.includes("to continue, first verify") ||
-          text.includes("to continue first verify") ||
-          text.includes("confirm it's you") ||
-          text.includes("confirm it’s you") ||
-          text.includes("2-step verification") ||
-          text.includes("two-step verification") ||
-          text.includes("enter your password") ||
-          text.includes("use your passkey") ||
-          text.includes("get a verification code") ||
-          text.includes("choose an account");
-      })();
-    `, true).catch(() => false) as Promise<boolean>;
+    const pageText = await this.view.webContents.executeJavaScript(
+      "(document.body?.innerText || '').slice(0, 20000)",
+      true
+    ).catch(() => "") as string;
+    return isManualGoogleAuthChallenge(url, pageText);
   }
 
   private deleteIfPresent(filePath: string) {

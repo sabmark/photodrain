@@ -68,6 +68,7 @@ export interface AppState {
   totalDownloadedBytes: number;
   activeDownloadCount: number;
   pausedDownloadCount: number;
+  googleAuthRequired: boolean;
   logs: AutomationLogEntry[];
   browserVisible: boolean;
   lastScreenshotPath: string | null;

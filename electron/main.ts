@@ -54,6 +54,7 @@ function createState(): AppState {
     totalDownloadedBytes: browser.getTotalDownloadedBytes(),
     activeDownloadCount: browser.getActiveDownloadCount(),
     pausedDownloadCount: browser.getPausedDownloadCount(),
+    googleAuthRequired: browser.getGoogleAuthRequired(),
     logs: logger.getEntries(),
     browserVisible: browser.getBrowserVisible(),
     lastScreenshotPath
@@ -320,6 +321,10 @@ function registerIpc() {
   ipcMain.handle("downloads:resume", async () => browser.resumeActiveDownloads());
   ipcMain.handle("downloads:cancel", async () => browser.cancelActiveDownloads());
   ipcMain.handle("logs:open-folder", async () => shell.openPath(path.dirname(logger.getLogPath())));
+}
+
+if (process.platform === "win32") {
+  app.setAppUserModelId("local.photodrain.app");
 }
 
 app.whenReady().then(async () => {

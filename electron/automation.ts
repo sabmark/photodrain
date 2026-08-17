@@ -4,8 +4,9 @@ import type { AutomationResult, AutomationStatus, FinalDeletePayload } from "./t
 import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
+import { waitForDownloadStartSignal } from "./downloadStartWait.js";
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const FINAL_DELETE_CONFIRMATION = "DELETE";
 
 interface PhotosSelectionCandidate {
@@ -60,6 +61,7 @@ export class AutomationRunner {
     this.status = "stopped";
     this.logger.log("warn", "Automation stopped by user");
     void this.updateAutomationBrowserLock(false);
+    void this.browser.setGoogleAuthRequired(false);
     this.notifyState();
   }
 
@@ -499,34 +501,43 @@ export class AutomationRunner {
   }
 
   private async waitForDownloadStartOrLimit(initialDownloadEventCount: number) {
-    const started = Date.now();
-    while (Date.now() - started < 20000) {
-      await this.waitOrThrow();
-      const limitState = await this.detectTakeoutDownloadLimitReachedSafely();
-      if (limitState === "blocked") {
-        return "modal-blocked" as const;
-      }
-      if (limitState === true) {
-        return "limit-reached" as const;
-      }
-      if (this.browser.getActiveDownloadCount() > 0) {
-        return "download-started" as const;
-      }
-      if (this.browser.getDownloadEventCount() > initialDownloadEventCount) {
-        return "download-started" as const;
-      }
-      await sleep(1000);
+    return waitForDownloadStartSignal({
+      timeoutMs: 20000,
+      pollIntervalMs: 1000,
+      waitForReady: () => this.waitOrThrow(),
+      waitForManualAuthentication: () => this.waitForGoogleAuthenticationIfNeeded(),
+      detectDownloadLimit: () => this.detectTakeoutDownloadLimitReachedSafely(),
+      hasDownloadStarted: () => this.browser.getActiveDownloadCount() > 0 || this.browser.getDownloadEventCount() > initialDownloadEventCount,
+      sleep
+    });
+  }
+
+  private async waitForGoogleAuthenticationIfNeeded() {
+    if (!await this.browser.isManualGoogleAuthPage()) {
+      return false;
     }
 
-    const limitState = await this.detectTakeoutDownloadLimitReachedSafely();
-    if (limitState === "blocked") {
-      return "modal-blocked" as const;
-    }
-    if (limitState === true) {
-      return "limit-reached" as const;
+    this.status = "needs-manual-action";
+    this.logger.log("warn", "Google needs manual authentication before the Takeout ZIP download can begin. Automated retry is paused.");
+    await this.browser.setGoogleAuthRequired(true);
+    this.notifyState();
+
+    try {
+      while (await this.browser.isManualGoogleAuthPage()) {
+        if (this.stopped) {
+          throw new Error("Automation stopped.");
+        }
+        await sleep(500);
+      }
+    } finally {
+      await this.browser.setGoogleAuthRequired(false);
     }
 
-    return this.browser.getActiveDownloadCount() > 0 || this.browser.getDownloadEventCount() > initialDownloadEventCount ? "download-started" as const : "no-download" as const;
+    this.status = "running";
+    this.logger.log("info", "Google authentication completed; continuing the Takeout ZIP download without restarting the export.");
+    await this.updateAutomationBrowserLock(true);
+    this.notifyState();
+    return true;
   }
 
   private async detectTakeoutDownloadLimitReachedSafely() {
