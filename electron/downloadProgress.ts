@@ -1,29 +1,4 @@
-export type DownloadProgressStatus = "idle" | "downloading" | "paused" | "partially-paused";
-
-export interface DownloadProgressSample {
-  filename: string;
-  receivedBytes: number;
-  totalBytes: number;
-  bytesPerSecond: number;
-  isPaused: boolean;
-  canResume: boolean;
-}
-
-export interface DownloadProgressItem extends Omit<DownloadProgressSample, "totalBytes"> {
-  totalBytes: number | null;
-  percentComplete: number | null;
-  etaSeconds: number | null;
-}
-
-export interface DownloadProgressSummary {
-  status: DownloadProgressStatus;
-  receivedBytes: number;
-  totalBytes: number | null;
-  percentComplete: number | null;
-  bytesPerSecond: number;
-  etaSeconds: number | null;
-  items: DownloadProgressItem[];
-}
+import type { DownloadProgressSample, DownloadProgressStatus, DownloadProgressSummary } from "./types.js";
 
 function percentage(receivedBytes: number, totalBytes: number) {
   return Math.min(100, Math.max(0, (receivedBytes / totalBytes) * 100));

@@ -1,5 +1,3 @@
-import type { DownloadProgressSummary } from "./downloadProgress.js";
-
 export type WorkflowStep =
   | "welcome"
   | "backup-folder"
@@ -30,6 +28,33 @@ export interface DownloadedFile {
 
 export interface InvalidDownloadFile extends DownloadedFile {
   reason: string;
+}
+
+export type DownloadProgressStatus = "idle" | "downloading" | "paused" | "partially-paused";
+
+export interface DownloadProgressSample {
+  filename: string;
+  receivedBytes: number;
+  totalBytes: number;
+  bytesPerSecond: number;
+  isPaused: boolean;
+  canResume: boolean;
+}
+
+export interface DownloadProgressItem extends Omit<DownloadProgressSample, "totalBytes"> {
+  totalBytes: number | null;
+  percentComplete: number | null;
+  etaSeconds: number | null;
+}
+
+export interface DownloadProgressSummary {
+  status: DownloadProgressStatus;
+  receivedBytes: number;
+  totalBytes: number | null;
+  percentComplete: number | null;
+  bytesPerSecond: number;
+  etaSeconds: number | null;
+  items: DownloadProgressItem[];
 }
 
 export interface StorageUsageItem {

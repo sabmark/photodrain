@@ -83,7 +83,7 @@ export function App() {
   const [folderActionPending, setFolderActionPending] = useState(false);
   const [deleteText, setDeleteText] = useState("");
   const [understandsDelete, setUnderstandsDelete] = useState(false);
-  const [trashEmptied, setTrashEmptied] = useState(false);
+  const [trashActionPending, setTrashActionPending] = useState(false);
   const [lastResult, setLastResult] = useState<string | null>(null);
   const [storageUsage, setStorageUsage] = useState<StorageUsageSummary | null>(null);
   const [storageUsagePending, setStorageUsagePending] = useState(false);
@@ -186,6 +186,17 @@ export function App() {
       void run(window.photoDrain.startPhotosCleanup);
     }
   }, [activeStep, state.downloadsComplete]);
+
+  useEffect(() => {
+    if (activeStep !== "photos-cleanup") {
+      photosCleanupOpenedRef.current = false;
+    }
+    if (activeStep === "empty-trash") {
+      setTrashActionPending(false);
+      setDeleteText("");
+      setUnderstandsDelete(false);
+    }
+  }, [activeStep]);
 
   useEffect(() => {
     if (state.profileRefreshActive) {
@@ -396,7 +407,7 @@ export function App() {
       setStorageUsage(null);
       setStorageUsageError(null);
       photosCleanupOpenedRef.current = false;
-      setTrashEmptied(false);
+      setTrashActionPending(false);
       setDeleteText("");
       setUnderstandsDelete(false);
       setState(nextState);
@@ -419,7 +430,7 @@ export function App() {
     setStorageUsageError(null);
     setActiveStep("welcome");
     photosCleanupOpenedRef.current = false;
-    setTrashEmptied(false);
+    setTrashActionPending(false);
     setDeleteText("");
     setUnderstandsDelete(false);
     setState(nextState);
@@ -439,24 +450,31 @@ export function App() {
     setStorageUsageError(null);
     setActiveStep("welcome");
     photosCleanupOpenedRef.current = false;
-    setTrashEmptied(false);
+    setTrashActionPending(false);
     setDeleteText("");
     setUnderstandsDelete(false);
     setState(nextState);
   }
 
   async function emptyTrashAndFinish() {
+    if (trashActionPending) {
+      return;
+    }
+    setTrashActionPending(true);
     setLastResult(null);
-    const result = await window.photoDrain.emptyTrash({ typedConfirmation: deleteText, understandsPermanentDelete: understandsDelete });
-    if (result && typeof result === "object" && "message" in result) {
-      setLastResult(String((result as { message: string }).message));
+    try {
+      const result = await window.photoDrain.emptyTrash({ typedConfirmation: deleteText, understandsPermanentDelete: understandsDelete });
+      if (result && typeof result === "object" && "message" in result) {
+        setLastResult(String((result as { message: string }).message));
+      }
+      if (result && typeof result === "object" && "ok" in result && (result as { ok: boolean }).ok) {
+        await window.photoDrain.hideBrowser();
+        setActiveStep("logs-settings");
+      }
+      setState(await window.photoDrain.getState());
+    } finally {
+      setTrashActionPending(false);
     }
-    if (result && typeof result === "object" && "ok" in result && (result as { ok: boolean }).ok) {
-      setTrashEmptied(true);
-      await window.photoDrain.hideBrowser();
-      setActiveStep("logs-settings");
-    }
-    setState(await window.photoDrain.getState());
   }
 
   function startBrowserResize(event: React.MouseEvent<HTMLDivElement>) {
@@ -663,13 +681,13 @@ export function App() {
                   <ShieldAlert className="mt-0.5 shrink-0 text-destructive" size={18} />
                   <span>This may permanently delete photos. Confirm backups first.</span>
                 </div>
-                <input disabled={trashEmptied} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm disabled:cursor-not-allowed disabled:opacity-50" value={deleteText} onChange={(event) => setDeleteText(event.target.value)} placeholder={`Type ${FINAL_DELETE_CONFIRMATION}`} />
+                <input disabled={trashActionPending} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm disabled:cursor-not-allowed disabled:opacity-50" value={deleteText} onChange={(event) => setDeleteText(event.target.value)} placeholder={`Type ${FINAL_DELETE_CONFIRMATION}`} />
                 <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" disabled={trashEmptied} checked={understandsDelete} onChange={(event) => setUnderstandsDelete(event.target.checked)} />
+                  <input type="checkbox" disabled={trashActionPending} checked={understandsDelete} onChange={(event) => setUnderstandsDelete(event.target.checked)} />
                   I understand this may permanently delete photos.
                 </label>
-                <Button variant="destructive" disabled={!canEmptyTrash || trashEmptied} onClick={emptyTrashAndFinish}>
-                  Empty trash
+                <Button variant="destructive" disabled={!canEmptyTrash || trashActionPending} onClick={emptyTrashAndFinish}>
+                  {trashActionPending ? "Verifying..." : "Empty trash"}
                 </Button>
               </Card>
             </Screen>

@@ -4,6 +4,7 @@ import type { AutomationResult, AutomationStatus, FinalDeletePayload } from "./t
 import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
+import { evaluateCleanupAction } from "./cleanupSafety.js";
 import { waitForDownloadStartSignal } from "./downloadStartWait.js";
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -771,10 +772,11 @@ export class AutomationRunner {
       await this.updateAutomationBrowserLock(true);
       const selection = await this.selectGooglePhotosRange();
       if (!selection.ok) {
+        await this.updateAutomationBrowserLock(false);
         return selection;
       }
       const result = await this.moveSelectedPhotosToTrash();
-      await this.updateAutomationBrowserLock(true);
+      await this.updateAutomationBrowserLock(result.ok);
       return result;
     });
   }
@@ -793,6 +795,17 @@ export class AutomationRunner {
       if (!this.browser.getCurrentUrl()?.includes("photos.google.com")) {
         await this.browser.open("https://photos.google.com/");
         await this.waitForReady();
+      }
+
+      if (!(await this.dismissPhotosBlockingOverlay())) {
+        const debugPath = await this.dumpPhotosDebug("photos-selection-blocked-by-overlay");
+        this.status = "needs-manual-action";
+        await this.updateAutomationBrowserLock(false);
+        this.notifyState();
+        return {
+          ok: false,
+          message: `Google Photos is covering the photo grid with a message. Close it in the visible browser, then retry Photos cleanup. Debug saved: ${debugPath}`
+        };
       }
 
       const first = await this.getPhotosSelectionCandidate("first");
@@ -872,12 +885,26 @@ export class AutomationRunner {
     await sleep(120);
     this.browser.clickAt(target.x, target.y);
     const confirmation = await this.clickPhotosMoveToTrashConfirmation();
-    if (!confirmation) {
-      this.logger.log("warn", "Google Photos move-to-trash confirmation dialog was not detected after trash click");
+    const confirmationDismissed = confirmation ? !(await this.isPhotosMoveToTrashDialogVisible()) : false;
+    const completionObserved = await this.waitForPhotosMoveCompletion();
+    const decision = evaluateCleanupAction({
+      confirmationDetected: Boolean(confirmation),
+      confirmationDismissed,
+      completionObserved
+    });
+
+    if (!decision.ok) {
+      const debugPath = await this.dumpPhotosDebug("photos-move-to-trash-not-verified");
+      this.status = "needs-manual-action";
+      await this.updateAutomationBrowserLock(false);
+      this.logger.log("warn", "Google Photos move-to-trash action was not verified", { reason: decision.reason, debugPath });
+      this.notifyState();
+      return { ok: false, message: `${decision.reason} PhotoDrain did not mark cleanup complete. Debug saved: ${debugPath}` };
     }
+
     await this.updateAutomationBrowserLock(false);
     this.status = "needs-manual-action";
-    this.logger.log("safety", "Moved selected Google Photos items to trash", target);
+    this.logger.log("safety", "Verified selected Google Photos items moved to trash", target);
     this.notifyState();
     return { ok: true, message: "Selected Google Photos items were moved to trash. Empty trash remains locked behind final confirmation." };
   }
@@ -911,17 +938,15 @@ export class AutomationRunner {
           .filter((el) => {
             if (!(el instanceof HTMLElement) || !visible(el)) return false;
             const text = textFor(el);
-            if (text.includes('trash') || text.includes('delete') || text.includes('remove')) return true;
-            const iconText = Array.from(el.querySelectorAll('svg, path, i')).map((child) => textFor(child)).join(' ');
-            return iconText.includes('trash') || iconText.includes('delete');
+            const rect = el.getBoundingClientRect();
+            if (rect.top >= 180 || rect.left < 72) return false;
+            return text.includes('move to trash') || text.includes('move to bin');
           })
           .map((el) => {
             const rect = el.getBoundingClientRect();
             const text = textFor(el);
             let score = 0;
-            if (text.includes('move to trash')) score += 1000;
-            if (text.includes('trash')) score += 500;
-            if (text.includes('delete')) score += 250;
+            if (text.includes('move to trash') || text.includes('move to bin')) score += 1000;
             if ((el.getAttribute('role') || '').toLowerCase() === 'button') score += 50;
             if (el.tagName.toLowerCase() === 'button') score += 50;
             if (rect.top < 160) score += 100;
@@ -1152,6 +1177,65 @@ export class AutomationRunner {
     `);
   }
 
+  private async waitForPhotosMoveCompletion() {
+    const started = Date.now();
+    while (Date.now() - started < 12_000) {
+      const completed = await this.browser.executeScript<boolean>(`
+        (() => {
+          if (location.pathname.includes('/trash')) return false;
+          const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+          const bodyText = normalize(document.body?.innerText);
+          if (bodyText.includes('moved to trash') || bodyText.includes('moved to bin')) return true;
+          const visible = (el) => {
+            if (!(el instanceof HTMLElement)) return false;
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight &&
+              style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const selected = Array.from(document.querySelectorAll('[aria-checked="true"], [aria-selected="true"], [data-is-selected="true"]'))
+            .filter(visible);
+          const moveAction = Array.from(document.querySelectorAll('button, [role="button"], [aria-label], [title]'))
+            .some((el) => {
+              if (!visible(el)) return false;
+              const text = normalize([el.getAttribute('aria-label'), el.getAttribute('title'), el.textContent].join(' '));
+              return text.includes('move to trash') || text.includes('move to bin');
+            });
+          return selected.length === 0 && !moveAction;
+        })();
+      `);
+      if (completed) return true;
+      await sleep(500);
+    }
+    return false;
+  }
+
+  private async dismissPhotosBlockingOverlay() {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const blocked = await this.browser.executeScript<boolean>(`
+        (() => {
+          const visible = (el) => {
+            if (!(el instanceof HTMLElement)) return false;
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight &&
+              style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          return Array.from(document.querySelectorAll('[aria-label]')).some((el) => {
+            if (!visible(el)) return false;
+            const label = (el.getAttribute('aria-label') || '').trim().toLowerCase();
+            return label === 'view next item' || label === 'view previous item';
+          });
+        })();
+      `);
+      if (!blocked) return true;
+      this.logger.log("info", "Dismissing a Google Photos message that covers the photo grid", { attempt: attempt + 1 });
+      this.browser.pressKey("Escape");
+      await sleep(600);
+    }
+    return false;
+  }
+
   private async getPhotosSelectionCandidate(position: "first" | "last") {
     return this.browser.executeScript<PhotosSelectionCandidate | null>(`
       (() => {
@@ -1162,6 +1246,10 @@ export class AutomationRunner {
           if (!(el instanceof HTMLElement)) return false;
           const rect = el.getBoundingClientRect();
           const style = window.getComputedStyle(el);
+          const x = Math.min(window.innerWidth - 1, Math.max(0, rect.left + rect.width / 2));
+          const y = Math.min(window.innerHeight - 1, Math.max(0, rect.top + rect.height / 2));
+          const hit = document.elementFromPoint(x, y);
+          const reachable = hit && (hit === el || el.contains(hit) || hit.contains(el));
           return rect.width > 0 &&
             rect.height > 0 &&
             rect.bottom > 0 &&
@@ -1170,7 +1258,8 @@ export class AutomationRunner {
             rect.left < window.innerWidth &&
             style.visibility !== 'hidden' &&
             style.display !== 'none' &&
-            style.pointerEvents !== 'none';
+            style.pointerEvents !== 'none' &&
+            Boolean(reachable);
         };
         const labelFor = (el) => [
           el.getAttribute('aria-label') || '',
@@ -1462,6 +1551,10 @@ export class AutomationRunner {
       this.setLastScreenshot(screenshot);
       const target = await this.findPhotosEmptyTrashControl();
       if (!target) {
+        if (await this.isPhotosTrashEmpty()) {
+          await this.updateAutomationBrowserLock(false);
+          return { ok: true, message: "Google Photos Trash is already empty." };
+        }
         const debugPath = await this.dumpPhotosDebug("photos-empty-trash-control-not-found");
         this.status = "needs-manual-action";
         this.notifyState();
@@ -1476,18 +1569,36 @@ export class AutomationRunner {
       await sleep(700);
 
       const confirmation = await this.findPhotosEmptyTrashConfirmation();
+      let confirmationDismissed = false;
       if (confirmation) {
         this.logger.log("safety", "Confirming Google Photos Empty trash dialog", confirmation);
         this.browser.moveMouseTo(confirmation.x, confirmation.y);
         await sleep(120);
         this.browser.clickAt(confirmation.x, confirmation.y);
         await sleep(700);
+        confirmationDismissed = !(await this.isPhotosEmptyTrashDialogVisible());
       } else {
         this.logger.log("warn", "Google Photos Empty trash confirmation dialog was not detected after Empty trash click");
       }
 
+      const completionObserved = await this.waitForPhotosTrashEmpty();
+      const decision = evaluateCleanupAction({
+        confirmationDetected: Boolean(confirmation),
+        confirmationDismissed,
+        completionObserved
+      });
+      if (!decision.ok) {
+        const debugPath = await this.dumpPhotosDebug("photos-empty-trash-not-verified");
+        this.status = "needs-manual-action";
+        await this.updateAutomationBrowserLock(false);
+        this.logger.log("warn", "Google Photos Empty trash action was not verified", { reason: decision.reason, debugPath });
+        this.notifyState();
+        return { ok: false, message: `${decision.reason} The confirmation form remains available so you can retry. Debug saved: ${debugPath}` };
+      }
+
       await this.updateAutomationBrowserLock(false);
-      return { ok: true, message: "Google Photos trash empty action was triggered after final local confirmation." };
+      this.logger.log("safety", "Verified Google Photos Trash is empty");
+      return { ok: true, message: "Google Photos Trash was verified empty after final confirmation." };
     });
   }
 
@@ -1497,6 +1608,59 @@ export class AutomationRunner {
 
   private async findPhotosEmptyTrashConfirmation() {
     return this.findGooglePhotosButtonByText(["empty trash"], ["cancel", "move to trash"], true);
+  }
+
+  private async isPhotosEmptyTrashDialogVisible() {
+    return this.browser.executeScript<boolean>(`
+      (() => {
+        const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+        const visible = (el) => {
+          if (!(el instanceof HTMLElement)) return false;
+          const rect = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight &&
+            style.visibility !== 'hidden' && style.display !== 'none';
+        };
+        return Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"], [aria-modal="true"]'))
+          .some((el) => visible(el) && normalize(el.textContent).includes('empty trash'));
+      })();
+    `);
+  }
+
+  private async isPhotosTrashEmpty() {
+    return this.browser.executeScript<boolean>(`
+      (() => {
+        if (!location.pathname.includes('/trash')) return false;
+        const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+        const visible = (el) => {
+          if (!(el instanceof HTMLElement)) return false;
+          const rect = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          return rect.width > 0 && rect.height > 0 && rect.bottom > 132 && rect.top < innerHeight &&
+            rect.right > 80 && style.visibility !== 'hidden' && style.display !== 'none';
+        };
+        const bodyText = normalize(document.body?.innerText);
+        if (bodyText.includes('trash is empty') || bodyText.includes('your trash is empty') || bodyText.includes('bin is empty')) return true;
+        const media = Array.from(document.querySelectorAll('[role="checkbox"], a[href*="/photo/"], a[href*="/video/"]'))
+          .filter(visible);
+        const emptyControl = Array.from(document.querySelectorAll('button, [role="button"], [aria-label], [title]'))
+          .some((el) => {
+            if (!visible(el)) return false;
+            const text = normalize([el.getAttribute('aria-label'), el.getAttribute('title'), el.textContent].join(' '));
+            return text.includes('empty trash');
+          });
+        return media.length === 0 && !emptyControl;
+      })();
+    `);
+  }
+
+  private async waitForPhotosTrashEmpty() {
+    const started = Date.now();
+    while (Date.now() - started < 15_000) {
+      if (await this.isPhotosTrashEmpty()) return true;
+      await sleep(500);
+    }
+    return false;
   }
 
   private async findGooglePhotosButtonByText(includeTerms: string[], excludeTerms: string[], preferDialog = false) {
