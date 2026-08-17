@@ -1,4 +1,4 @@
-import { AlertCircle, Check, ChevronDown, Clock3, Database, FolderOpen, HardDrive, Loader2, LogOut, Mail, Plus, RefreshCw, ShieldAlert, Square, Trash2, UserRound } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, Clock3, Database, FolderOpen, HardDrive, Loader2, LogOut, Mail, Pause, Play, Plus, RefreshCw, ShieldAlert, Square, Trash2, UserRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import packageJson from "../../package.json";
 import type { AppState, AutomationLogEntry, StorageUsageSummary, WorkflowStep } from "../../electron/types";
@@ -56,6 +56,15 @@ const emptyState: AppState = {
   totalDownloadedBytes: 0,
   activeDownloadCount: 0,
   pausedDownloadCount: 0,
+  downloadProgress: {
+    status: "idle",
+    receivedBytes: 0,
+    totalBytes: null,
+    percentComplete: null,
+    bytesPerSecond: 0,
+    etaSeconds: null,
+    items: []
+  },
   googleAuthRequired: false,
   logs: [],
   browserVisible: false,
@@ -589,10 +598,17 @@ export function App() {
               )}
               {state.activeDownloadCount > 0 && (
                 <div className="mt-3 space-y-3 rounded-md border border-border bg-muted px-3 py-3 text-sm">
-                  <div>Active downloads: {state.activeDownloadCount}. Canceling deletes incomplete local files.</div>
+                  <DownloadProgressPanel state={state} />
                   <div className="flex flex-wrap gap-2">
+                    {state.pausedDownloadCount < state.activeDownloadCount && (
+                      <Button variant="secondary" icon={<Pause size={16} />} onClick={() => run(window.photoDrain.pauseDownloads)}>Pause download</Button>
+                    )}
+                    {state.pausedDownloadCount > 0 && (
+                      <Button variant="secondary" icon={<Play size={16} />} onClick={() => run(window.photoDrain.resumeDownloads)}>Resume download</Button>
+                    )}
                     <Button variant="destructive" icon={<Square size={16} />} onClick={() => run(window.photoDrain.cancelDownloads)}>Cancel download</Button>
                   </div>
+                  <div className="text-xs text-muted-foreground">Canceling deletes incomplete local files.</div>
                 </div>
               )}
             </Screen>
@@ -1073,6 +1089,74 @@ function DownloadSummary({ state }: { state: AppState }) {
       </div>
     </Card>
   );
+}
+
+function DownloadProgressPanel({ state }: { state: AppState }) {
+  const progress = state.downloadProgress;
+  const statusLabel = progress.status === "paused"
+    ? "Paused"
+    : progress.status === "partially-paused"
+      ? "Partially paused"
+      : "Downloading";
+  const percentLabel = progress.percentComplete === null ? "Calculating…" : `${progress.percentComplete.toFixed(1)}%`;
+  const byteLabel = progress.totalBytes === null
+    ? `${formatBytes(progress.receivedBytes)} downloaded`
+    : `${formatBytes(progress.receivedBytes)} of ${formatBytes(progress.totalBytes)}`;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="font-medium">{statusLabel} {state.activeDownloadCount} ZIP file(s)</div>
+        <div className="tabular-nums font-semibold">{percentLabel}</div>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-background">
+        <div
+          className={`h-full rounded-full bg-primary transition-[width] ${progress.percentComplete === null ? "w-full animate-pulse opacity-50" : ""}`}
+          style={progress.percentComplete === null ? undefined : { width: `${progress.percentComplete}%` }}
+          role="progressbar"
+          aria-label="Download progress"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progress.percentComplete ?? undefined}
+        />
+      </div>
+      <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
+        <div><span className="font-medium text-foreground">Transferred</span><br />{byteLabel}</div>
+        <div><span className="font-medium text-foreground">Speed</span><br />{progress.status === "paused" ? "Paused" : progress.bytesPerSecond > 0 ? `${formatBytes(progress.bytesPerSecond)}/s` : "Calculating…"}</div>
+        <div><span className="font-medium text-foreground">Time remaining</span><br />{formatEta(progress.etaSeconds, progress.status)}</div>
+      </div>
+      {progress.items.length > 1 && (
+        <div className="space-y-1 border-t border-border pt-2 text-xs">
+          {progress.items.map((item) => (
+            <div key={item.filename} className="flex items-center justify-between gap-3">
+              <span className="min-w-0 truncate">{item.filename}{item.isPaused ? " — paused" : ""}</span>
+              <span className="shrink-0 tabular-nums text-muted-foreground">{item.percentComplete === null ? "Unknown size" : `${item.percentComplete.toFixed(1)}%`}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatEta(seconds: number | null, status: AppState["downloadProgress"]["status"]) {
+  if (status === "paused" || status === "partially-paused") {
+    return "Paused";
+  }
+  if (seconds === null || !Number.isFinite(seconds)) {
+    return "Calculating…";
+  }
+  const rounded = Math.max(0, Math.round(seconds));
+  if (rounded < 60) {
+    return `${rounded}s`;
+  }
+  const minutes = Math.floor(rounded / 60);
+  const remainingSeconds = rounded % 60;
+  if (minutes < 60) {
+    return `${minutes}m ${remainingSeconds}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
 }
 
 function LogViewer({ logs }: { logs: AutomationLogEntry[] }) {

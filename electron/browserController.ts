@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AutomationLogger } from "./logger.js";
 import type { DownloadedFile, StorageUsageSummary } from "./types.js";
+import { pauseDownloads, resumeDownloads } from "./downloadControls.js";
+import { summarizeDownloadProgress } from "./downloadProgress.js";
 import { isManualGoogleAuthChallenge } from "./googleAuth.js";
 
 const TOP_BAR_HEIGHT = 0;
@@ -21,7 +23,7 @@ export class BrowserController {
   private activeDownloadItems = new Map<string, DownloadItem>();
   private userCanceledDownloads = new Set<string>();
   private downloadEventCount = 0;
-  private downloadProgress = new Map<string, { receivedBytes: number; totalBytes: number }>();
+  private downloadProgress = new Map<string, { receivedBytes: number; totalBytes: number; state: "progressing" | "interrupted" }>();
   private browserVisible = false;
   private preferredBrowserWidth: number | null = null;
   private browserInteractionLocked = false;
@@ -66,7 +68,20 @@ export class BrowserController {
   }
 
   getPausedDownloadCount() {
-    return 0;
+    return [...this.activeDownloadItems.entries()].filter(([targetPath, item]) =>
+      item.isPaused() || this.downloadProgress.get(targetPath)?.state === "interrupted"
+    ).length;
+  }
+
+  getDownloadProgress() {
+    return summarizeDownloadProgress([...this.activeDownloadItems.entries()].map(([targetPath, item]) => ({
+      filename: path.basename(targetPath),
+      receivedBytes: item.getReceivedBytes(),
+      totalBytes: item.getTotalBytes(),
+      bytesPerSecond: item.getCurrentBytesPerSecond(),
+      isPaused: item.isPaused() || this.downloadProgress.get(targetPath)?.state === "interrupted",
+      canResume: item.canResume()
+    })));
   }
 
   getGoogleAuthRequired() {
@@ -74,11 +89,39 @@ export class BrowserController {
   }
 
   pauseActiveDownloads() {
-    this.logger.log("warn", "Pause download ignored; Takeout downloads are canceled and restarted instead of paused");
+    const result = pauseDownloads([...this.activeDownloadItems.values()]);
+    this.updateTaskbarDownloadProgress();
+    this.logger.log(result.failed > 0 ? "warn" : "info", `Paused ${result.succeeded} active download(s)`, result);
+    this.notifyState();
+    return {
+      ok: result.succeeded > 0 && result.failed === 0,
+      message: result.failed > 0
+        ? `Paused ${result.succeeded} download(s), but ${result.failed} could not be paused.`
+        : result.succeeded > 0
+          ? `Paused ${result.succeeded} download(s).`
+          : "No running downloads were available to pause."
+    };
   }
 
   resumeActiveDownloads() {
-    this.logger.log("warn", "Resume download ignored; Takeout downloads are verified by size and restarted when incomplete");
+    const resumableItems = [...this.activeDownloadItems.entries()]
+      .filter(([targetPath, item]) => item.isPaused() || this.downloadProgress.get(targetPath)?.state === "interrupted")
+      .map(([, item]) => item);
+    const result = resumeDownloads(resumableItems);
+    this.updateTaskbarDownloadProgress();
+    this.logger.log(result.failed > 0 ? "warn" : "info", `Resumed ${result.succeeded} paused download(s)`, result);
+    this.notifyState();
+    const restartNote = result.mayRestart > 0
+      ? ` ${result.mayRestart} download(s) may restart from byte zero because Google did not advertise range support.`
+      : "";
+    return {
+      ok: result.succeeded > 0 && result.failed === 0,
+      message: result.failed > 0
+        ? `Resumed ${result.succeeded} download(s), but ${result.failed} could not be resumed.${restartNote}`
+        : result.succeeded > 0
+          ? `Resumed ${result.succeeded} download(s).${restartNote}`
+          : "No paused downloads were available to resume."
+    };
   }
 
   cancelActiveDownloads() {
@@ -862,19 +905,21 @@ export class BrowserController {
 
       this.activeDownloads.add(targetPath);
       this.activeDownloadItems.set(targetPath, item);
-      this.downloadProgress.set(targetPath, { receivedBytes: item.getReceivedBytes(), totalBytes });
+      this.downloadProgress.set(targetPath, { receivedBytes: item.getReceivedBytes(), totalBytes, state: "progressing" });
       item.setSavePath(targetPath);
       this.logger.log("info", `Download started: ${filename}`, { targetPath });
       this.updateTaskbarDownloadProgress();
       void this.setBrowserInteractionLocked(true);
       this.notifyState();
 
-      item.on("updated", () => {
+      item.on("updated", (_updatedEvent, state) => {
         this.downloadProgress.set(targetPath, {
           receivedBytes: item.getReceivedBytes(),
-          totalBytes: item.getTotalBytes()
+          totalBytes: item.getTotalBytes(),
+          state
         });
         this.updateTaskbarDownloadProgress();
+        this.notifyState();
       });
 
       item.on("done", (_doneEvent, state) => {
@@ -941,7 +986,9 @@ export class BrowserController {
       return;
     }
 
-    this.parent.setProgressBar(Math.min(1, Math.max(0, receivedBytes / totalBytes)));
+    const progress = Math.min(1, Math.max(0, receivedBytes / totalBytes));
+    const allPaused = this.activeDownloadItems.size > 0 && this.getPausedDownloadCount() === this.activeDownloadItems.size;
+    this.parent.setProgressBar(progress, allPaused ? { mode: "paused" } : undefined);
   }
 
   async isManualGoogleAuthPage() {

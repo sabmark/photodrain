@@ -54,6 +54,7 @@ function createState(): AppState {
     totalDownloadedBytes: browser.getTotalDownloadedBytes(),
     activeDownloadCount: browser.getActiveDownloadCount(),
     pausedDownloadCount: browser.getPausedDownloadCount(),
+    downloadProgress: browser.getDownloadProgress(),
     googleAuthRequired: browser.getGoogleAuthRequired(),
     logs: logger.getEntries(),
     browserVisible: browser.getBrowserVisible(),

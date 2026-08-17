@@ -1,3 +1,5 @@
+import type { DownloadProgressSummary } from "./downloadProgress.js";
+
 export type WorkflowStep =
   | "welcome"
   | "backup-folder"
@@ -68,6 +70,7 @@ export interface AppState {
   totalDownloadedBytes: number;
   activeDownloadCount: number;
   pausedDownloadCount: number;
+  downloadProgress: DownloadProgressSummary;
   googleAuthRequired: boolean;
   logs: AutomationLogEntry[];
   browserVisible: boolean;
