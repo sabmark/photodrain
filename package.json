@@ -1,6 +1,6 @@
 {
   "name": "photodrain",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "PhotoDrain desktop automation skeleton for Google Takeout and Google Photos cleanup.",
