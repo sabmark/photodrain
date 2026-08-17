@@ -2,10 +2,11 @@ import { BrowserView, BrowserWindow, DownloadItem, Notification, Session, app, d
 import fs from "node:fs";
 import path from "node:path";
 import type { AutomationLogger } from "./logger.js";
-import type { DownloadedFile, StorageUsageSummary } from "./types.js";
+import type { DownloadedFile, InvalidDownloadFile, StorageUsageSummary } from "./types.js";
 import { pauseDownloads, resumeDownloads } from "./downloadControls.js";
 import { summarizeDownloadProgress } from "./downloadProgress.js";
 import { isManualGoogleAuthChallenge } from "./googleAuth.js";
+import { inspectZipCompletion } from "./zipValidation.js";
 
 const TOP_BAR_HEIGHT = 0;
 const SIDEBAR_WIDTH = 260;
@@ -19,6 +20,7 @@ export class BrowserController {
   private googleSession: Session | null = null;
   private configuredDownloadPartitions = new Set<string>();
   private downloads = new Map<string, DownloadedFile>();
+  private invalidDownloads = new Map<string, InvalidDownloadFile>();
   private activeDownloads = new Set<string>();
   private activeDownloadItems = new Map<string, DownloadItem>();
   private userCanceledDownloads = new Set<string>();
@@ -53,6 +55,10 @@ export class BrowserController {
 
   getDownloadedFiles() {
     return [...this.downloads.values()];
+  }
+
+  getInvalidDownloadFiles() {
+    return [...this.invalidDownloads.values()];
   }
 
   getTotalDownloadedBytes() {
@@ -686,22 +692,34 @@ export class BrowserController {
       return [];
     }
 
-    const files = fs
+    const candidates = fs
       .readdirSync(folder)
       .filter((filename) => filename.toLowerCase().endsWith(".zip"))
       .map((filename) => {
         const filePath = path.join(folder, filename);
         const stat = fs.statSync(filePath);
         return { filename, path: filePath, sizeBytes: stat.size };
-      })
-      .filter((file) => file.sizeBytes > 0 && !file.filename.endsWith(".crdownload") && !file.filename.endsWith(".tmp"));
+      });
 
     this.downloads.clear();
-    for (const file of files) {
-      this.downloads.set(file.path, file);
+    this.invalidDownloads.clear();
+    for (const file of candidates) {
+      const inspection = inspectZipCompletion(file.path);
+      if (file.sizeBytes > 0 && inspection.valid) {
+        this.downloads.set(file.path, file);
+        continue;
+      }
+      this.invalidDownloads.set(file.path, {
+        ...file,
+        reason: inspection.reason || "ZIP file is empty or incomplete."
+      });
     }
+    const files = this.getDownloadedFiles();
     if (!options.silent) {
       this.logger.log("info", `Validated ${files.length} downloaded ZIP file(s)`, { files });
+      if (this.invalidDownloads.size > 0) {
+        this.logger.log("warn", `Rejected ${this.invalidDownloads.size} incomplete or invalid ZIP file(s)`, { files: this.getInvalidDownloadFiles() });
+      }
       this.notifyState();
     }
     return files;

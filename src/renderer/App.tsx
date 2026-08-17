@@ -53,6 +53,7 @@ const emptyState: AppState = {
   status: "idle",
   downloadsComplete: false,
   downloadedFiles: [],
+  invalidDownloadFiles: [],
   totalDownloadedBytes: 0,
   activeDownloadCount: 0,
   pausedDownloadCount: 0,
@@ -592,6 +593,23 @@ export function App() {
                       <div className="mt-1 leading-6">
                         Enter it only in the visible Google page. PhotoDrain has paused its retry timer and will continue automatically after Google finishes verification. Your password is never read or stored by PhotoDrain.
                       </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {state.invalidDownloadFiles.length > 0 && (
+                <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="mt-0.5 shrink-0 text-destructive" size={20} />
+                    <div className="min-w-0">
+                      <div className="font-semibold">Incomplete ZIP detected — backup is not complete</div>
+                      <div className="mt-1 text-muted-foreground">PhotoDrain will not unlock cleanup until Google finishes a structurally valid ZIP download.</div>
+                      {state.invalidDownloadFiles.map((file) => (
+                        <div key={file.path} className="mt-2 rounded border border-border bg-background px-3 py-2 text-xs">
+                          <div className="truncate font-medium">{file.filename} — {formatBytes(file.sizeBytes)}</div>
+                          <div className="mt-1 text-muted-foreground">{file.reason}</div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 </div>

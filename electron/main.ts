@@ -51,6 +51,7 @@ function createState(): AppState {
     status: automation.getStatus(),
     downloadsComplete: downloadedFiles.length > 0,
     downloadedFiles,
+    invalidDownloadFiles: browser.getInvalidDownloadFiles(),
     totalDownloadedBytes: browser.getTotalDownloadedBytes(),
     activeDownloadCount: browser.getActiveDownloadCount(),
     pausedDownloadCount: browser.getPausedDownloadCount(),

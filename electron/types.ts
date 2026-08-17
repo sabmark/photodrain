@@ -28,6 +28,10 @@ export interface DownloadedFile {
   sizeBytes: number;
 }
 
+export interface InvalidDownloadFile extends DownloadedFile {
+  reason: string;
+}
+
 export interface StorageUsageItem {
   label: string;
   value: string;
@@ -67,6 +71,7 @@ export interface AppState {
   status: AutomationStatus;
   downloadsComplete: boolean;
   downloadedFiles: DownloadedFile[];
+  invalidDownloadFiles: InvalidDownloadFile[];
   totalDownloadedBytes: number;
   activeDownloadCount: number;
   pausedDownloadCount: number;
