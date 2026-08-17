@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AutomationLogger } from "./logger.js";
 import type { DownloadedFile, InvalidDownloadFile, StorageUsageSummary } from "./types.js";
+import { ensureBackupFolder } from "./backupFolder.js";
 import { pauseDownloads, resumeDownloads } from "./downloadControls.js";
 import { summarizeDownloadProgress } from "./downloadProgress.js";
 import { isManualGoogleAuthChallenge } from "./googleAuth.js";
@@ -691,6 +692,8 @@ export class BrowserController {
     if (!folder) {
       return [];
     }
+
+    ensureBackupFolder(folder);
 
     const candidates = fs
       .readdirSync(folder)

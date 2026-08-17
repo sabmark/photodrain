@@ -328,12 +328,15 @@ export function App() {
         setLastResult("Add a Google profile before starting the workflow.");
         return;
       }
-      const currentState = await window.photoDrain.getState();
+      let currentState = await window.photoDrain.getState();
       if (!currentState.backupRootFolder || !currentState.backupFolder) {
         setLastResult("Select a backup root folder before continuing.");
         setState(currentState);
         return;
       }
+
+      currentState = await window.photoDrain.setBackupFolder(currentState.backupRootFolder);
+      setState(currentState);
 
       const isLoggedIn = await window.photoDrain.checkLoginStatus();
       if (isLoggedIn) {
@@ -345,6 +348,9 @@ export function App() {
       setContinueAfterProfileLogin(true);
       setLastResult("Google needs you to sign in again. Use the visible browser, then click Finish Google sign-in.");
       await window.photoDrain.openGoogleLogin();
+      setState(await window.photoDrain.getState());
+    } catch (error) {
+      setLastResult(error instanceof Error ? error.message : String(error));
       setState(await window.photoDrain.getState());
     } finally {
       setFolderActionPending(false);

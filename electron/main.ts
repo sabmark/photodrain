@@ -1,8 +1,8 @@
 import { BrowserWindow, Menu, app, ipcMain, shell } from "electron";
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AutomationRunner } from "./automation.js";
+import { ensureBackupFolder, getDatedBackupFolder } from "./backupFolder.js";
 import { BrowserController } from "./browserController.js";
 import { AutomationLogger } from "./logger.js";
 import { createProfile, deleteProfile, ensureProfiles, getActiveProfile, getProfiles, isPendingProfile, prunePendingProfiles, settingsStore, switchProfile, updateActiveProfile } from "./store.js";
@@ -16,8 +16,6 @@ const pendingProfileIdsThisRun = new Set<string>();
 
 const logger = new AutomationLogger();
 ensureProfiles();
-const dateFolderName = () => new Date().toISOString().slice(0, 10);
-const getDatedBackupFolder = (rootFolder: string | null | undefined) => rootFolder ? path.join(rootFolder, dateFolderName()) : null;
 const getBackupFolder = () => {
   const activeProfile = getActiveProfile();
   return getDatedBackupFolder(activeProfile?.backupRootFolder) ?? activeProfile?.backupFolder ?? null;
@@ -206,7 +204,7 @@ function registerIpc() {
       if (!folder) {
         throw new Error("Could not create dated backup folder.");
       }
-      fs.mkdirSync(folder, { recursive: true });
+      ensureBackupFolder(folder);
       updateActiveProfile({ backupRootFolder: rootFolder, backupFolder: folder });
       logger.log("info", "Backup root folder selected", { profile: getActiveProfile()?.name, rootFolder, folder });
       notifyState();
@@ -219,7 +217,7 @@ function registerIpc() {
     if (!datedFolder) {
       throw new Error("Backup root folder is required.");
     }
-    fs.mkdirSync(datedFolder, { recursive: true });
+    ensureBackupFolder(datedFolder);
     updateActiveProfile({ backupRootFolder: folder, backupFolder: datedFolder });
     logger.log("info", "Backup root folder set", { profile: getActiveProfile()?.name, rootFolder: folder, folder: datedFolder });
     notifyState();
